@@ -1,0 +1,68 @@
+FROM php81-build-centos-arm64:7
+RUN sed -i 's|mirror.centos.org|mirrors.aliyun.com/centos-vault|g' /etc/yum.repos.d/*.repo && \
+    sed -i 's/^#.*baseurl=http/baseurl=http/g' /etc/yum.repos.d/*.repo && \
+    sed -i 's/^mirrorlist=http/#mirrorlist=http/g' /etc/yum.repos.d/*.repo
+RUN sed -i 's|http://|https://|g' /etc/yum.repos.d/*.repo
+RUN sed -i 's/enabled=1/enabled=0/' /etc/yum/pluginconf.d/fastestmirror.conf
+RUN yum clean all && \
+    yum makecache && \
+    localedef -c -i en_US -f UTF-8 en_US.UTF-8
+
+RUN yum install -y centos-release-scl
+
+RUN if [ "aarch64" = "aarch64" ]; then \
+        sed -i 's|mirror.centos.org/centos|mirrors.aliyun.com/centos-vault/altarch|g' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo ; \
+        sed -i 's|mirror.centos.org/centos|mirrors.aliyun.com/centos-vault/altarch|g' /etc/yum.repos.d/CentOS-SCLo-scl.repo ; \
+    else \
+        sed -i 's|mirror.centos.org|mirrors.aliyun.com/centos-vault|g' /etc/yum.repos.d/*.repo ; \
+    fi
+RUN sed -i 's/^#.*baseurl=http/baseurl=http/g' /etc/yum.repos.d/*.repo && \
+    sed -i 's/^mirrorlist=http/#mirrorlist=http/g' /etc/yum.repos.d/*.repo && \
+    sed -i 's|http://|https://|g' /etc/yum.repos.d/*.repo
+
+RUN yum install -y devtoolset-10-gcc-* devtoolset-10-libatomic-devel
+RUN echo "source scl_source enable devtoolset-10" >> /etc/bashrc
+RUN source /etc/bashrc
+RUN yum install -y which
+
+RUN curl -o cmake.tgz -#fSL https://github.com/Kitware/CMake/releases/download/v3.31.4/cmake-3.31.4-linux-aarch64.tar.gz && \
+    mkdir /cmake && \
+    tar -xzf cmake.tgz -C /cmake --strip-components 1
+
+WORKDIR /app
+COPY ./composer.* /app/
+ADD ./bin/setup-runtime /app/bin/setup-runtime
+ADD ./bin/spc /app/bin/spc
+RUN /app/bin/setup-runtime
+ADD ./src /app/src
+RUN /app/bin/php /app/bin/composer install --no-dev
+ENV SPC_LIBC=glibc
+ENV PATH="/app/bin:/cmake/bin:/opt/rh/devtoolset-10/root/usr/bin:$PATH"
+
+ADD ./config /app/config
+RUN CC=gcc bin/spc doctor --auto-fix --debug
+RUN bin/spc install-pkg upx
+RUN if [ -f /app/buildroot/bin/re2c ]; then \
+        cp /app/buildroot/bin/re2c /usr/local/bin/re2c ;\
+    fi
+
+RUN curl -o make.tgz -fsSL https://ftp.gnu.org/gnu/make/make-4.4.tar.gz && \
+    tar -zxvf make.tgz && \
+    cd make-4.4 && \
+    ./configure && \
+    make && \
+    make install && \
+    ln -sf /usr/local/bin/make /usr/bin/make
+
+RUN curl -o automake.tgz -fsSL https://ftp.gnu.org/gnu/automake/automake-1.17.tar.xz && \
+    tar -xvf automake.tgz && \
+    cd automake-1.17 && \
+    ./configure && \
+    make && \
+    make install && \
+    ln -sf /usr/local/bin/automake /usr/bin/automake
+
+RUN mv /app/pkgroot/$(uname -m)-linux /app/pkgroot-private
+ADD bin/docker-entrypoint.sh /bin/docker-entrypoint.sh
+RUN chmod +x /bin/docker-entrypoint.sh
+ENTRYPOINT ["/bin/docker-entrypoint.sh"]
